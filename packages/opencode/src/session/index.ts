@@ -46,7 +46,7 @@ import { Permission } from "../permission"
 export namespace Session {
   const log = Log.create({ service: "session" })
 
-  const OUTPUT_TOKEN_MAX = 32_000
+  const OUTPUT_TOKEN_MAX = 16_000
 
   const parentSessionTitlePrefix = "New session - "
   const childSessionTitlePrefix = "Child session - "
