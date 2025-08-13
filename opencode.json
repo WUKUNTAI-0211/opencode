@@ -12,7 +12,7 @@
       "name": "Delta",
       "options": {
         "baseURL": "https://llmgateway.deltaww.com/v1",
-        "apiKey": "sk-tfmRcwqHMBPlOwpoCXMGXg"
+        "apiKey": "{env:DELTA_API_KEY}"
       },
       "models": {
         "openai/Qwen/Qwen3-235B-A22B-FP8": {
@@ -22,7 +22,7 @@
     },
     "openrouter": {
       "options": {
-        "apiKey": "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"
+        "apiKey": "{env:OPENROUTER_API_KEY}"
       }
     }
   }
