@@ -5,14 +5,14 @@ import { Tool } from "./tool"
 import DESCRIPTION from "./bash.txt"
 import { App } from "../app/app"
 import { Permission } from "../permission"
-import { Config } from "../config/config"
 import { Filesystem } from "../util/filesystem"
 import { lazy } from "../util/lazy"
 import { Log } from "../util/log"
 import { Wildcard } from "../util/wildcard"
 import { $ } from "bun"
+import { Agent } from "../agent/agent"
 
-const MAX_OUTPUT_LENGTH = 30000
+const MAX_OUTPUT_LENGTH = 30_000
 const DEFAULT_TIMEOUT = 1 * 60 * 1000
 const MAX_TIMEOUT = 10 * 60 * 1000
 
@@ -40,20 +40,8 @@ export const BashTool = Tool.define("bash", {
   async execute(params, ctx) {
     const timeout = Math.min(params.timeout ?? DEFAULT_TIMEOUT, MAX_TIMEOUT)
     const app = App.info()
-    const cfg = await Config.get()
     const tree = await parser().then((p) => p.parse(params.command))
-    const permissions = (() => {
-      const value = cfg.permission?.bash
-      if (!value)
-        return {
-          "*": "allow",
-        }
-      if (typeof value === "string")
-        return {
-          "*": value,
-        }
-      return value
-    })()
+    const permissions = await Agent.get(ctx.agent).then((x) => x.permission.bash)
 
     let needsAsk = false
     for (const node of tree.rootNode.descendantsOfType("command")) {
@@ -93,17 +81,10 @@ export const BashTool = Tool.define("bash", {
 
       // always allow cd if it passes above check
       if (!needsAsk && command[0] !== "cd") {
-        const action = (() => {
-          for (const [pattern, value] of Object.entries(permissions)) {
-            const match = Wildcard.match(node.text, pattern)
-            log.info("checking", { text: node.text.trim(), pattern, match })
-            if (match) return value
-          }
-          return "ask"
-        })()
+        const action = Wildcard.all(node.text, permissions)
         if (action === "deny") {
           throw new Error(
-            "The user has specifically restricted access to this command, you are not allowed to execute it.",
+            `The user has specifically restricted access to this command, you are not allowed to execute it. Here is the configuration: ${JSON.stringify(permissions)}`,
           )
         }
         if (action === "ask") needsAsk = true
@@ -126,7 +107,6 @@ export const BashTool = Tool.define("bash", {
     const process = exec(params.command, {
       cwd: app.path.cwd,
       signal: ctx.abort,
-      maxBuffer: MAX_OUTPUT_LENGTH,
       timeout,
     })
 
@@ -173,6 +153,11 @@ export const BashTool = Tool.define("bash", {
         description: params.description,
       },
     })
+
+    if (output.length > MAX_OUTPUT_LENGTH) {
+      output = output.slice(0, MAX_OUTPUT_LENGTH)
+      output += "\n\n(Output was truncated due to length limit)"
+    }
 
     return {
       title: params.command,

@@ -110,6 +110,10 @@ export namespace Config {
       ].map((x) => "file://" + x),
     )
 
+    if (Flag.OPENCODE_PERMISSION) {
+      result.permission = mergeDeep(result.permission ?? {}, JSON.parse(Flag.OPENCODE_PERMISSION))
+    }
+
     // Handle migration from autoshare to share field
     if (result.autoshare === true && !result.share) {
       result.share = "auto"
@@ -164,6 +168,9 @@ export namespace Config {
   export const Mcp = z.discriminatedUnion("type", [McpLocal, McpRemote])
   export type Mcp = z.infer<typeof Mcp>
 
+  export const Permission = z.union([z.literal("ask"), z.literal("allow"), z.literal("deny")])
+  export type Permission = z.infer<typeof Permission>
+
   export const Agent = z
     .object({
       model: z.string().optional(),
@@ -174,6 +181,13 @@ export namespace Config {
       disable: z.boolean().optional(),
       description: z.string().optional().describe("Description of when to use the agent"),
       mode: z.union([z.literal("subagent"), z.literal("primary"), z.literal("all")]).optional(),
+      permission: z
+        .object({
+          edit: Permission.optional(),
+          bash: z.union([Permission, z.record(z.string(), Permission)]).optional(),
+          webfetch: Permission.optional(),
+        })
+        .optional(),
     })
     .catchall(z.any())
     .openapi({
@@ -242,9 +256,6 @@ export namespace Config {
     ref: "LayoutConfig",
   })
   export type Layout = z.infer<typeof Layout>
-
-  export const Permission = z.union([z.literal("ask"), z.literal("allow"), z.literal("deny")])
-  export type Permission = z.infer<typeof Permission>
 
   export const Info = z
     .object({
@@ -418,14 +429,14 @@ export namespace Config {
     return load(text, filepath)
   }
 
-  async function load(text: string, filepath: string) {
+  async function load(text: string, configFilepath: string) {
     text = text.replace(/\{env:([^}]+)\}/g, (_, varName) => {
       return process.env[varName] || ""
     })
 
     const fileMatches = text.match(/\{file:[^}]+\}/g)
     if (fileMatches) {
-      const configDir = path.dirname(filepath)
+      const configDir = path.dirname(configFilepath)
       const lines = text.split("\n")
 
       for (const match of fileMatches) {
@@ -438,7 +449,20 @@ export namespace Config {
           filePath = path.join(os.homedir(), filePath.slice(2))
         }
         const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(configDir, filePath)
-        const fileContent = (await Bun.file(resolvedPath).text()).trim()
+        const fileContent = (
+          await Bun.file(resolvedPath)
+            .text()
+            .catch((error) => {
+              const errMsg = `bad file reference: "${match}"`
+              if (error.code === "ENOENT") {
+                throw new InvalidError(
+                  { path: configFilepath, message: errMsg + ` ${resolvedPath} does not exist` },
+                  { cause: error },
+                )
+              }
+              throw new InvalidError({ path: configFilepath, message: errMsg }, { cause: error })
+            })
+        ).trim()
         // escape newlines/quotes, strip outer quotes
         text = text.replace(match, JSON.stringify(fileContent).slice(1, -1))
       }
@@ -463,7 +487,7 @@ export namespace Config {
         .join("\n")
 
       throw new JsonError({
-        path: filepath,
+        path: configFilepath,
         message: `\n--- JSONC Input ---\n${text}\n--- Errors ---\n${errorDetails}\n--- End ---`,
       })
     }
@@ -472,21 +496,21 @@ export namespace Config {
     if (parsed.success) {
       if (!parsed.data.$schema) {
         parsed.data.$schema = "https://opencode.ai/config.json"
-        await Bun.write(filepath, JSON.stringify(parsed.data, null, 2))
+        await Bun.write(configFilepath, JSON.stringify(parsed.data, null, 2))
       }
       const data = parsed.data
       if (data.plugin) {
         for (let i = 0; i < data.plugin?.length; i++) {
           const plugin = data.plugin[i]
           try {
-            data.plugin[i] = import.meta.resolve(plugin, filepath)
+            data.plugin[i] = import.meta.resolve(plugin, configFilepath)
           } catch (err) {}
         }
       }
       return data
     }
 
-    throw new InvalidError({ path: filepath, issues: parsed.error.issues })
+    throw new InvalidError({ path: configFilepath, issues: parsed.error.issues })
   }
   export const JsonError = NamedError.create(
     "ConfigJsonError",
@@ -501,6 +525,7 @@ export namespace Config {
     z.object({
       path: z.string(),
       issues: z.custom<z.ZodIssue[]>().optional(),
+      message: z.string().optional(),
     }),
   )
 
