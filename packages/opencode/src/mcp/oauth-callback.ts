@@ -144,7 +144,13 @@ export async function ensureRunning(redirectUri?: string): Promise<void> {
 
   const running = await isPortInUse(port)
   if (running) {
-    return
+    // Cannot reuse: the other listener may not be opencode, and OAuth
+    // callbacks landing there surface as a misleading CSRF error.
+    throw new Error(
+      `OAuth callback port ${port} is already in use. ` +
+        `Set "oauth.callbackPort" (or "oauth.redirectUri") on the MCP server ` +
+        `entry in your opencode config to use a different port.`,
+    )
   }
 
   currentPort = port
